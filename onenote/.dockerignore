@@ -1,0 +1,11 @@
+node_modules
+npm-debug.log
+dist
+.git
+.github
+.vscode
+.env*
+*.md
+data
+token-cache.json
+device-code.txt 
