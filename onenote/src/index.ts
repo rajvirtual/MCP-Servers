@@ -17,7 +17,19 @@ import { Client, ResponseType } from "@microsoft/microsoft-graph-client";
 import { PublicClientApplication, DeviceCodeRequest } from "@azure/msal-node";
 
 // Load environment variables from .env.local
-config({ path: join(dirname(fileURLToPath(import.meta.url)), "../.env.local") });
+const envPath = join(dirname(fileURLToPath(import.meta.url)), "../.env.local");
+if (fs.existsSync(envPath)) {
+  config({ path: envPath });
+} else {
+  console.warn("Warning: .env.local file not found. Using environment variables from system.");
+}
+
+// Validate required environment variables
+if (!process.env.CLIENT_ID) {
+  throw new Error(
+    "CLIENT_ID environment variable is required. Please create a .env.local file with your Azure client ID or set it in your environment."
+  );
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
