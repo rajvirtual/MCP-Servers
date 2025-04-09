@@ -16,6 +16,7 @@
   "dependencies": {
     "@azure/identity": "^3.3.2",
     "@microsoft/microsoft-graph-client": "3.0.7",
+    "dotenv": "^16.4.1",
     "html-to-text": "^9.0.5"
   },
   "devDependencies": {
