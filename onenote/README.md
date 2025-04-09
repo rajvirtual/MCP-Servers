@@ -85,6 +85,7 @@ Parameters:
 3. Configure authentication:
    - Under "Authentication" settings, set "Supported account types" to:
      - "Accounts in any organizational directory (Any Microsoft Entra ID tenant - Multitenant) and personal Microsoft accounts (e.g. Skype, Xbox)"
+   - Enable "Allow public client flows" for the app
 4. Note your Application (client) ID for configuration
 
 ### Installation
