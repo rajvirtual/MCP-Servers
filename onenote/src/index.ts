@@ -68,6 +68,13 @@ const createPagePrompt: Prompt = {
   text: 'I want you to create a page called "[PAGE_NAME]" in the section "[SECTION_NAME]" of my notebook "[NOTEBOOK_NAME]". To do this, you\'ll need to:\n1. First get a list of all my notebooks\n2. Find "[NOTEBOOK_NAME]" in the list and note its ID\n3. Use that ID to get all sections in the notebook\n4. Find "[SECTION_NAME]" in the list and note its ID\n5. Use that section ID to create the new page',
 };
 
+const saveDiagramPrompt: Prompt = {
+  id: "save-diagram",
+  name: "Save diagram to OneNote",
+  description: "Generates a workflow diagram in Mermaid format and saves it as a JPEG to a specified notebook and section in OneNote.",
+  text: 'Generate a workflow diagram in Mermaid format for the requested topic and save it to my OneNote section "[SECTION_NAME]" in notebook "[NOTEBOOK_NAME]" with the title "[DIAGRAM_TITLE]". Provide the diagram content in Mermaid syntax, along with the title, notebook name "[NOTEBOOK_NAME]", and section name "[SECTION_NAME]".',
+};
+
 // Store all prompts in an array
 const prompts = [
   getNotebooksPrompt,
@@ -77,6 +84,7 @@ const prompts = [
   createNotebookPrompt,
   createSectionPrompt,
   createPagePrompt,
+  saveDiagramPrompt,
 ];
 
 // OneNote tool definitions
@@ -142,6 +150,42 @@ const oneNoteCreateTool: Tool = {
       },
     },
     required: ["type", "content"],
+  },
+};
+
+const oneNoteDiagramTool: Tool = {
+  name: "onenote-diagram",
+  description:
+    "Creates and renders a workflow diagram in Mermaid format as a JPEG and saves it to a specified notebook and section in OneNote. Use this tool to save diagrams to OneNote, such as in Raj's Notebook under the Architecture section.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      type: {
+        type: "string",
+        enum: ["save_diagram"],
+      },
+      title: {
+        type: "string",
+        description: "Title for the diagram page",
+      },
+      content: {
+        type: "string",
+        description: "Diagram content in Mermaid syntax",
+      },
+      notebookName: {
+        type: "string",
+        description: "Name of the notebook to save to",
+      },
+      sectionName: {
+        type: "string",
+        description: "Name of the section to save to",
+      },
+      description: {
+        type: "string",
+        description: "Optional description text for the diagram",
+      },
+    },
+    required: ["type", "title", "content", "notebookName", "sectionName"],
   },
 };
 
@@ -277,6 +321,18 @@ class OneNoteService {
     fs.writeFileSync(deviceCodePath, content);
   }
 
+  async appendToLog(message: string) {
+    try {
+      const logPath = join(__dirname, "logs.txt");
+      const timestamp = new Date().toISOString();
+      const logEntry = `[${timestamp}] ${message}\n`;
+
+      fs.appendFileSync(logPath, logEntry);
+    } catch (error) {
+      console.error("Failed to write to log file:", error);
+    }
+  }
+
   async getNotebooks() {
     const response = await this.client!.api(`/users/me/onenote/notebooks`)
       .select("id,displayName,createdDateTime,lastModifiedDateTime")
@@ -358,6 +414,176 @@ class OneNoteService {
 
     return response;
   }
+
+  async saveDiagram(
+    sectionId: string,
+    title: string,
+    content: string,
+    description: string = ""
+  ) {
+    try {
+      // Generate the JPEG using Puppeteer (in memory)
+      const jpegBuffer = await this.generateJpegFromMermaid(content);
+      this.appendToLog(
+        `JPEG generated successfully in memory, size: ${jpegBuffer.length} bytes`
+      );
+
+      // Create text content for the page
+      const textContent = `# ${title}
+          ${description ? description : ""}
+
+          ## Diagram Source (Mermaid)
+          \`\`\`
+          ${content}
+          \`\`\`
+          `;
+
+      // Create the initial page with text content
+      const newPage = await this.client!.api(
+        `/me/onenote/sections/${sectionId}/pages`
+      )
+        .header("Content-Type", "application/xhtml+xml")
+        .post(
+          `<!DOCTYPE html><html><head><title>${title}</title></head><body><div>${textContent}</div></body></html>`
+        );
+
+      this.appendToLog(`Created page with ID: ${newPage.id}`);
+
+      const pageId = newPage.id;
+
+      await new Promise(resolve => setTimeout(resolve, 5000));
+
+      // Prepare the multipart PATCH request to add the image
+      const boundary = `PartBoundary${Date.now()}`;
+      const commandsPart = [
+        `--${boundary}\r\n`,
+        'Content-Disposition: form-data; name="Commands"\r\n',
+        "Content-Type: application/json\r\n",
+        "\r\n",
+        JSON.stringify([
+          {
+            target: "body",
+            action: "append",
+            content: `<img src="name:diagramImage" alt="${title}" data-src-type="image/jpeg"/>`,
+          },
+        ]),
+        "\r\n",
+      ].join("");
+
+      const imagePart = [
+        `--${boundary}\r\n`,
+        'Content-Disposition: form-data; name="diagramImage"\r\n',
+        "Content-Type: image/jpeg\r\n",
+        "Content-Transfer-Encoding: binary\r\n",
+        "\r\n",
+      ].join("");
+
+      const closingBoundary = `\r\n--${boundary}--\r\n`;
+
+      this.appendToLog(`Multipart commands part:\n${commandsPart}`);
+      this.appendToLog(`Multipart image part headers:\n${imagePart}`);
+      this.appendToLog(`Multipart closing boundary:\n${closingBoundary}`);
+
+      const multipartBuffer = Buffer.concat([
+        Buffer.from(commandsPart, "utf-8"),
+        Buffer.from(imagePart, "utf-8"),
+        jpegBuffer,
+        Buffer.from(closingBoundary, "utf-8"),
+      ]);
+
+      // Upload the JPEG to the page
+      const contentUrl = `/me/onenote/pages/${pageId}/content`;
+
+      try {
+        await this.client!.api(contentUrl)
+          .header("Content-Type", `multipart/form-data; boundary=${boundary}`)
+          .patch(multipartBuffer);
+      } catch (apiError) {
+        this.appendToLog(
+          `PATCH request failed: ${JSON.stringify(apiError, null, 2)}`
+        );
+        throw apiError;
+      }
+
+      this.appendToLog(
+        `JPEG image successfully appended to page ID: ${pageId}`
+      );
+
+      return newPage;
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error ? error.message : String(error);
+      this.appendToLog(`Error in saveDiagram: ${errorMessage}`);
+      if (error instanceof Error) {
+        throw new Error(`Failed to save diagram: ${error.message}`);
+      } else {
+        throw new Error(`Failed to save diagram: ${String(error)}`);
+      }
+    }
+  }
+
+  async generateJpegFromMermaid(mermaidCode: string) {
+    const puppeteer = await import("puppeteer");
+
+    let browser = null;
+    try {
+      // Launch a headless browser
+      browser = await puppeteer.default.launch({
+        headless: true,
+        args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      });
+
+      this.appendToLog(`generateJpegFromMermaid mermaidCode ${mermaidCode}`);
+
+      const page = await browser.newPage();
+
+      // Create a simple HTML page with Mermaid
+      const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <script src="https://cdn.jsdelivr.net/npm/mermaid/dist/mermaid.min.js"></script>
+        <script>
+          mermaid.initialize({
+            startOnLoad: true,
+            theme: 'neutral',
+            securityLevel: 'loose'
+          });
+        </script>
+      </head>
+      <body>
+        <div class="mermaid">
+          ${mermaidCode}
+        </div>
+      </body>
+      </html>
+      `;
+
+      await page.setContent(html);
+
+      this.appendToLog(`generateJpegFromMermaid HTML Content set`);
+
+      // Wait for Mermaid to render
+      await page.waitForFunction('document.querySelector(".mermaid svg")', {
+        timeout: 5000,
+      });
+
+      // Take a screenshot of the rendered diagram and return the buffer as JPEG
+      const element = await page.$(".mermaid");
+      return await element!.screenshot({ type: "jpeg", quality: 80 });
+    } catch (error) {
+      console.error("Error converting Mermaid to JPEG:", error);
+      throw new Error(
+        `Failed to convert Mermaid diagram to JPEG: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
+    } finally {
+      if (browser) {
+        await browser.close();
+      }
+    }
+  }
 }
 
 // Create MCP Server
@@ -374,6 +600,7 @@ async function main() {
       tools: {
         oneNoteReadTool,
         oneNoteCreateTool,
+        oneNoteDiagramTool,
       },
     },
   });
@@ -403,11 +630,11 @@ async function main() {
       prompt,
     };
   });
-  
+
   // Handle list tools request
   server.setRequestHandler(ListToolsRequestSchema, async (request) => {
     return {
-      tools: [oneNoteReadTool, oneNoteCreateTool],
+      tools: [oneNoteReadTool, oneNoteCreateTool, oneNoteDiagramTool],
     };
   });
 
@@ -570,6 +797,77 @@ async function main() {
         }
       }
 
+      if (name === "onenote-diagram") {
+        const type = parameters.type as string;
+        const title = parameters.title as string;
+        const content = parameters.content as string;
+        const notebookName = parameters.notebookName as string;
+        const sectionName = parameters.sectionName as string;
+        const description = (parameters.description as string) || "";
+
+        if (type === "save_diagram") {
+          try {
+            // 1. Get all notebooks
+            const notebooks = await oneNoteService.getNotebooks();
+            const notebook = notebooks.find(
+              (nb: any) => nb.displayName === notebookName
+            );
+            if (!notebook) {
+              throw new Error(`Notebook "${notebookName}" not found`);
+            }
+
+            // 2. Get all sections in notebook
+            const sections = await oneNoteService.getSections(notebook.id);
+            const section = sections.find(
+              (s: any) => s.displayName === sectionName
+            );
+            if (!section) {
+              throw new Error(
+                `Section "${sectionName}" not found in notebook "${notebookName}"`
+              );
+            }
+
+            // 3. Save the diagram using the saveDiagram method
+            const result = await oneNoteService.saveDiagram(
+              section.id,
+              title,
+              content,
+              description
+            );
+
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    id: result.id,
+                    title: result.title,
+                    notebookName: notebookName,
+                    sectionName: sectionName,
+                    message: "Diagram saved successfully to OneNote",
+                  }),
+                },
+              ],
+              isError: false,
+            };
+          } catch (error) {
+            return {
+              content: [
+                {
+                  type: "text",
+                  text: JSON.stringify({
+                    error:
+                      error instanceof Error ? error.message : String(error),
+                    message: "Failed to save diagram to OneNote",
+                  }),
+                },
+              ],
+              isError: true,
+            };
+          }
+        }
+      }
+
       throw new Error(`Unsupported tool or operation: ${name}`);
     } catch (error: unknown) {
       const errorMessage =
@@ -577,7 +875,7 @@ async function main() {
       throw new Error(`Failed to execute tool: ${errorMessage}`);
     }
   });
-
+  
   // Start the server with stdio transport
   const transport = new StdioServerTransport();
   await server.connect(transport);
