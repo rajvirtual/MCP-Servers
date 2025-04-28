@@ -17,7 +17,9 @@
     "@azure/identity": "^3.3.2",
     "@microsoft/microsoft-graph-client": "3.0.7",
     "dotenv": "^16.4.1",
-    "html-to-text": "^9.0.5"
+    "html-to-text": "^9.0.5",
+    "mermaid": "^11.6.0",
+    "puppeteer": "^24.6.1"
   },
   "devDependencies": {
     "@microsoft/microsoft-graph-types": "^2.38.0",
