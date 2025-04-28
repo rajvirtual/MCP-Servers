@@ -4,6 +4,7 @@ import { dirname, join } from "path";
 import { fileURLToPath } from "url";
 import { convert } from "html-to-text";
 import * as fs from "fs";
+import { config } from "dotenv";
 import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
@@ -14,6 +15,21 @@ import {
 } from "@modelcontextprotocol/sdk/types.js";
 import { Client, ResponseType } from "@microsoft/microsoft-graph-client";
 import { PublicClientApplication, DeviceCodeRequest } from "@azure/msal-node";
+
+// Load environment variables from .env.local
+const envPath = join(dirname(fileURLToPath(import.meta.url)), "../.env.local");
+if (fs.existsSync(envPath)) {
+  config({ path: envPath });
+} else {
+  console.warn("Warning: .env.local file not found. Using environment variables from system.");
+}
+
+// Validate required environment variables
+if (!process.env.CLIENT_ID) {
+  throw new Error(
+    "CLIENT_ID environment variable is required. Please create a .env.local file with your Azure client ID or set it in your environment."
+  );
+}
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -110,6 +126,10 @@ const oneNoteReadTool: Tool = {
       notebookId: {
         type: "string",
         description: "ID of the notebook to list sections from",
+      },
+      sectionGroupId: {
+        type: "string",
+        description: "ID of the section group to list sections from",
       },
       includeContent: {
         type: "boolean",
@@ -343,6 +363,24 @@ class OneNoteService {
   async getSections(notebookId: string) {
     const response = await this.client!.api(
       `/me/onenote/notebooks/${notebookId}/sections`
+    )
+      .select("id,displayName,pagesUrl")
+      .get();
+    return response.value;
+  }
+
+  async getSectionGroups(notebookId: string) {
+    const response = await this.client!.api(
+      `/me/onenote/notebooks/${notebookId}/sectionGroups`
+    )
+      .select("id,displayName,sectionsUrl,sectionGroupsUrl")
+      .get();
+    return response.value;
+  }
+
+  async getSectionsFromGroup(sectionGroupId: string) {
+    const response = await this.client!.api(
+      `/me/onenote/sectionGroups/${sectionGroupId}/sections`
     )
       .select("id,displayName,pagesUrl")
       .get();
@@ -650,6 +688,7 @@ async function main() {
         const pageId = parameters.pageId as string;
         const sectionId = parameters.sectionId as string;
         const notebookId = parameters.notebookId as string;
+        const sectionGroupId = parameters.sectionGroupId as string;
         const includeContent = parameters.includeContent as boolean;
         const includeMetadata = parameters.includeMetadata as boolean;
 
@@ -699,8 +738,28 @@ async function main() {
             ],
             isError: false,
           };
+        } else if (sectionGroupId) {
+          const sections = await oneNoteService.getSectionsFromGroup(sectionGroupId);
+          return {
+            content: [
+              {
+                type: "text",
+                text: JSON.stringify({
+                  sectionGroupId,
+                  sections: sections.map((section: any) => ({
+                    id: section.id,
+                    name: section.displayName,
+                  })),
+                }),
+              },
+            ],
+            isError: false,
+          };
         } else if (notebookId) {
-          const sections = await oneNoteService.getSections(notebookId);
+          const [sections, sectionGroups] = await Promise.all([
+            oneNoteService.getSections(notebookId),
+            oneNoteService.getSectionGroups(notebookId)
+          ]);
           return {
             content: [
               {
@@ -710,6 +769,10 @@ async function main() {
                   sections: sections.map((section: any) => ({
                     id: section.id,
                     name: section.displayName,
+                  })),
+                  sectionGroups: sectionGroups.map((group: any) => ({
+                    id: group.id,
+                    name: group.displayName,
                   })),
                 }),
               },
