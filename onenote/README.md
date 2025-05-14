@@ -168,7 +168,17 @@ When running in Docker, the authentication flow works as follows:
    - Add the following environment variable:
      - Name: CLIENT_ID
      - Value: [Your Microsoft Azure Application Client ID]
-4. Save the configuration and connect to the server
+4. Save the configuration and connect to the server.
+
+   Find the file location (claude_desktop_config.json):
+
+   The file is typically located at:
+
+   On Mac OS (~/Library/Application Support/Claude/claude_desktop_config.json)
+
+   On Windows (C:\Users\YourUsername\AppData\Roaming\Claude\claude_desktop_config.json)
+
+   ![alt text](image.png)
 
 ## Authentication Flow
 
